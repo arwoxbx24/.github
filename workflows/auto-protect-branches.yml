@@ -1,0 +1,37 @@
+name: Auto-apply Branch Protection
+
+on:
+  repository:
+    types: [created]
+
+jobs:
+  protect-branch:
+    # Запускаем, только если репозиторий не пустой
+    if: github.event.repository.size > 0
+    runs-on: ubuntu-latest
+    steps:
+      - name: Protect main branch
+        env:
+          GH_TOKEN: ${{ secrets.PAT_FOR_BRANCH_PROTECTION }}
+          OWNER: ${{ github.event.repository.owner.login }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          echo "Защищаю ветку 'main' в репозитории ${{ env.OWNER }}/${{ env.REPO }}"
+          
+          # Отправляем правильный JSON-запрос к API GitHub
+          gh api \
+            --method PUT \
+            -H "Accept: application/vnd.github.v3+json" \
+            /repos/${OWNER}/${REPO}/branches/main/protection \
+            -f required_status_checks=null \
+            -f enforce_admins=true \
+            --input - << EOF
+            {
+              "required_pull_request_reviews": {
+                "required_approving_review_count": 1
+              },
+              "restrictions": null,
+              "allow_force_pushes": false,
+              "allow_deletions": false
+            }
+          EOF
