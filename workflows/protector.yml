@@ -1,0 +1,104 @@
+name: Apply Branch Protection
+
+on:
+  # Запускать раз в день
+  schedule:
+    - cron: '0 3 * * *'
+  # Позволяет запускать вручную
+  workflow_dispatch:
+
+jobs:
+  protect-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Protection Script
+        env:
+          GITHUB_USER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
+        run: |
+          import os
+          import requests
+          import sys
+
+          # --- Configuration ---
+          GITHUB_USER = os.environ.get("GITHUB_USER")
+          GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+          BRANCH_TO_PROTECT = "main"
+          PROTECTION_PAYLOAD = {
+              "enforce_admins": True,
+              "required_pull_request_reviews": {
+                  "required_approving_review_count": 1,
+                  "dismiss_stale_reviews": True,
+                  "require_code_owner_reviews": False,
+              },
+              "required_status_checks": None,
+              "restrictions": None,
+              "allow_force_pushes": False,
+              "allow_deletions": False,
+          }
+
+          # --- Script Logic ---
+          def apply_protection():
+              if not GITHUB_USER or not GITHUB_TOKEN:
+                  print("Error: GITHUB_USER and GITHUB_TOKEN environment variables must be set.")
+                  sys.exit(1)
+              print(f"Starting process for user: {GITHUB_USER}")
+              headers = {
+                  "Authorization": f"token {GITHUB_TOKEN}",
+                  "Accept": "application/vnd.github.v3+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+              repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos"
+              page = 1
+              repos_to_process = []
+              while True:
+                  response = requests.get(repos_url, headers=headers, params={"page": page, "per_page": 100})
+                  if response.status_code != 200:
+                      print(f"Error fetching repositories: {response.status_code} - {response.text}")
+                      sys.exit(1)
+                  data = response.json()
+                  if not data:
+                      break
+                  repos_to_process.extend(data)
+                  page += 1
+              print(f"Found {len(repos_to_process)} repositories.")
+              for repo in repos_to_process:
+                  repo_name = repo["name"]
+                  if repo["archived"]:
+                      print(f"\nSkipping archived repository: {repo_name}")
+                      continue
+                  print(f"\nProcessing repository: {repo_name}")
+                  branches_url = f"https://api.github.com/repos/{GITHUB_USER}/{repo_name}/branches"
+                  branches_response = requests.get(branches_url, headers=headers)
+                  if branches_response.status_code != 200:
+                      print(f"  Could not fetch branches for {repo_name}. Skipping.")
+                      continue
+                  branch_names = [b['name'] for b in branches_response.json()]
+                  target_branch = None
+                  if BRANCH_TO_PROTECT in branch_names:
+                      target_branch = BRANCH_TO_PROTECT
+                  elif "master" in branch_names:
+                      target_branch = "master"
+                      print(f"  '{BRANCH_TO_PROTECT}' not found, using 'master' as fallback.")
+                  if not target_branch:
+                      print(f"  No '{BRANCH_TO_PROTECT}' or 'master' branch found. Skipping.")
+                      continue
+                  protection_url = f"https://api.github.com/repos/{GITHUB_USER}/{repo_name}/branches/{target_branch}/protection"
+                  put_response = requests.put(protection_url, headers=headers, json=PROTECTION_PAYLOAD)
+                  if put_response.status_code == 200:
+                      print(f"  Successfully applied protection to branch '{target_branch}'.")
+                  else:
+                      print(f"  Failed to apply protection to branch '{target_branch}'.")
+                      print(f"  Status: {put_response.status_code} - {put_response.text}")
+              print("\nProcess complete.")
+
+          if __name__ == "__main__":
+              apply_protection()
