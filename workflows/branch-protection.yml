@@ -1,0 +1,19 @@
+name: Default Branch Protection
+
+on:
+  repository:
+    types: [created]
+
+jobs:
+  protect-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Protect Default Branch
+        uses: benjefferies/branch-protection-bot@v1.2.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.repository.default_branch }}
+          enforce_admins: true
+          required_approving_review_count: 1
+          allow_force_pushes: false
+          allow_deletions: false
