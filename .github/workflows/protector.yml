@@ -2,11 +2,8 @@ name: Apply Branch Protection
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # тест: каждые 5 минут (удалите/измените позже)
-  workflow_dispatch:
-
-permissions:
-  contents: read   # минимально для GITHUB_TOKEN; но мы используем PAT в secrets
+    - cron: '*/5 * * * *'  # каждые 5 минут
+  workflow_dispatch:        # запуск вручную
 
 jobs:
   protect-branches:
@@ -18,165 +15,66 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip requests
+        run: pip install requests
 
-      - name: Create and run protect script (dry-run by default)
+      - name: Run Protection Script
         env:
-          GITHUB_USER: ${{ github.repository_owner }}   # owner (user или org)
-          GITHUB_TOKEN: ${{ secrets.PAT }}              # <-- положите ваш PAT в secrets как 'PAT'
-          BRANCH_TO_PROTECT: main
-          DRY_RUN: "true"                               # поменяйте на "false" чтобы реально применить
+          GITHUB_USER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
         run: |
-          cat > protect.py <<'PY'
-          #!/usr/bin/env python3
-          import os, sys, time, requests, logging
-
-          logging.basicConfig(level=logging.INFO, format="%(message)s")
+          import os, requests, sys
           GITHUB_USER = os.environ.get("GITHUB_USER")
           GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-          BRANCH_TO_PROTECT = os.environ.get("BRANCH_TO_PROTECT", "main")
-          DRY_RUN = os.environ.get("DRY_RUN", "true").lower() in ("1","true","yes")
-          PER_PAGE = 100
-          HEADERS = {
-              "Authorization": f"Bearer {GITHUB_TOKEN}",
-              "Accept": "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-          }
-
-          # default protection payload (safe, minimal)
+          BRANCH_TO_PROTECT = "main"
           PROTECTION_PAYLOAD = {
               "enforce_admins": True,
               "required_pull_request_reviews": {
-                  "dismissal_restrictions": {"users": [], "teams": [], "apps": []},
+                  "required_approving_review_count": 1,
                   "dismiss_stale_reviews": True,
                   "require_code_owner_reviews": False,
-                  "required_approving_review_count": 1,
-                  "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []}
               },
               "required_status_checks": None,
               "restrictions": None,
-              "required_linear_history": False,
               "allow_force_pushes": False,
               "allow_deletions": False,
-              "required_conversation_resolution": True,
-              "lock_branch": False,
-              "block_creations": False,
-              "allow_fork_syncing": False
           }
 
-          if not GITHUB_USER or not GITHUB_TOKEN:
-              logging.error("GITHUB_USER and GITHUB_TOKEN must be set (env). Exiting.")
-              sys.exit(1)
+          def apply_protection():
+              if not GITHUB_USER or not GITHUB_TOKEN:
+                  print("❌ Нет токена")
+                  sys.exit(1)
 
-          session = requests.Session()
-          session.headers.update(HEADERS)
+              headers = {
+                  "Authorization": f"token {GITHUB_TOKEN}",
+                  "Accept": "application/vnd.github.v3+json",
+              }
 
-          def check_rate_and_exit(resp):
-              if resp is None:
-                  return
-              if resp.status_code in (403, 429):
-                  rem = resp.headers.get("x-ratelimit-remaining")
-                  reset = resp.headers.get("x-ratelimit-reset")
-                  if rem == "0" and reset:
-                      reset_ts = int(reset)
-                      wait = max(0, reset_ts - int(time.time()))
-                      logging.error(f"Rate limit exhausted. Reset in {wait}s (epoch {reset_ts}). Exiting.")
-                      sys.exit(1)
-
-          def list_repos_for_authenticated_user():
-              url = "https://api.github.com/user/repos"
-              page=1
-              repos=[]
-              while True:
-                  r = session.get(url, params={"per_page": PER_PAGE, "page": page})
-                  if r.status_code != 200:
-                      logging.warning(f"GET {url} page {page} -> {r.status_code}: {r.text[:200]}")
-                      return None
-                  data = r.json()
-                  if not data:
-                      break
-                  repos.extend(data)
-                  page += 1
-              return repos
-
-          def list_org_repos(org):
-              url = f"https://api.github.com/orgs/{org}/repos"
-              page=1
-              repos=[]
-              while True:
-                  r = session.get(url, params={"per_page": PER_PAGE, "page": page})
-                  if r.status_code != 200:
-                      logging.debug(f"org GET {url} -> {r.status_code}")
-                      return None
-                  data = r.json()
-                  if not data:
-                      break
-                  repos.extend(data)
-                  page += 1
-              return repos
-
-          # Attempt strategy:
-          # 1) list repos the token user can access (/user/repos)
-          # 2) if fails or empty, try org repos (/orgs/{owner}/repos)
-          repos = list_repos_for_authenticated_user()
-          if not repos:
-              logging.info("No repos from /user/repos or failed → trying /orgs/{owner}/repos")
-              repos = list_org_repos(GITHUB_USER)
-          if not repos:
-              logging.info("Fallback: using public user repos /users/{owner}/repos")
-              url = f"https://api.github.com/users/{GITHUB_USER}/repos"
-              page=1
+              repos_url = f"https://api.github.com/users/{GITHUB_USER}/repos"
+              page = 1
               repos = []
               while True:
-                  r = session.get(url, params={"per_page": PER_PAGE, "page": page})
-                  if r.status_code != 200:
-                      logging.error(f"Failed to list repos (users): {r.status_code} {r.text}")
-                      sys.exit(1)
+                  r = requests.get(repos_url, headers=headers, params={"page": page, "per_page": 100})
+                  if r.status_code != 200: sys.exit(1)
                   data = r.json()
-                  if not data:
-                      break
+                  if not data: break
                   repos.extend(data)
-                  page+=1
+                  page += 1
 
-          logging.info(f"Found {len(repos)} repositories to inspect.")
+              for repo in repos:
+                  if repo["archived"]: continue
+                  repo_name = repo["name"]
 
-          for repo in repos:
-              repo_name = repo.get("name")
-              archived = repo.get("archived", False)
-              if archived:
-                  logging.info(f"Skipping archived repo: {repo_name}")
-                  continue
+                  branches_url = f"https://api.github.com/repos/{GITHUB_USER}/{repo_name}/branches"
+                  br = requests.get(branches_url, headers=headers)
+                  if br.status_code != 200: continue
 
-              owner = repo.get("owner", {}).get("login", GITHUB_USER)
-              # get branches
-              branches_url = f"https://api.github.com/repos/{owner}/{repo_name}/branches"
-              r = session.get(branches_url, params={"per_page": PER_PAGE})
-              if r.status_code != 200:
-                  logging.warning(f"Could not fetch branches for {repo_name}: {r.status_code}")
-                  continue
-              branch_names = [b["name"] for b in r.json()]
-              target_branch = None
-              if BRANCH_TO_PROTECT in branch_names:
-                  target_branch = BRANCH_TO_PROTECT
-              elif "master" in branch_names:
-                  target_branch = "master"
-                  logging.info(f"'{BRANCH_TO_PROTECT}' not found in {repo_name}; fallback to 'master'")
-              else:
-                  logging.info(f"No target branch in {repo_name}; skipping")
-                  continue
+                  names = [b["name"] for b in br.json()]
+                  target = BRANCH_TO_PROTECT if BRANCH_TO_PROTECT in names else ("master" if "master" in names else None)
+                  if not target: continue
 
-              if DRY_RUN:
-                  logging.info(f"[DRY RUN] Would apply protection to {owner}/{repo_name}@{target_branch}")
-                  continue
+                  url = f"https://api.github.com/repos/{GITHUB_USER}/{repo_name}/branches/{target}/protection"
+                  put = requests.put(url, headers=headers, json=PROTECTION_PAYLOAD)
+                  print(f"{repo_name}/{target} → {put.status_code}")
 
-              protection_url = f"https://api.github.com/repos/{owner}/{repo_name}/branches/{target_branch}/protection"
-              put = session.put(protection_url, json=PROTECTION_PAYLOAD)
-              if put.status_code == 200:
-                  logging.info(f"Protection applied: {owner}/{repo_name}@{target_branch}")
-              else:
-                  logging.error(f"Failed to apply protection on {owner}/{repo_name}@{target_branch}: {put.status_code} {put.text}")
-                  check_rate_and_exit(put)
-
-          logging.info("Done.")
-          PY
-          python protect.py
+          if __name__ == "__main__":
+              apply_protection()
