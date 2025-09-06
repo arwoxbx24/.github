@@ -3,6 +3,12 @@ name: Automated Branch Protector
 
 # Запускать только вручную
 on:
+  # Триггер: запускать, когда в вашем аккаунте создан новый репозиторий
+  repository:
+    types: [created]
+  
+  # Мы также оставляем workflow_dispatch, чтобы вы могли при необходимости
+  # запустить его вручную для всех старых репозиториев.
   workflow_dispatch:
 
 jobs:
