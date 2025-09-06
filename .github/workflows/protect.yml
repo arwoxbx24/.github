@@ -1,3 +1,4 @@
+# Имя воркфлоу
 name: Automated Branch Protector
 
 # Запускать только вручную
@@ -59,4 +60,3 @@ EOF_PAYLOAD
               echo "➡️ ПРОПУСК: Ветка 'main' в '$REPO' не найдена."
             fi
           done
-EOF
