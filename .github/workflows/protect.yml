@@ -13,7 +13,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
           GITHUB_USER: ${{ github.repository_owner }}
-          # Правила защиты вынесены сюда, чтобы избежать ошибок синтаксиса в скрипте
           PROTECTION_RULES: |
             {
               "enforce_admins": true,
@@ -27,17 +26,38 @@ jobs:
               "allow_deletions": false
             }
         run: |
-          # 1. Получаем список всех ваших репозиториев
-          REPO_NAMES=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          echo "Шаг 1: Получение списка репозиториев от GitHub API..."
+          
+          # Безопасно вызываем API, сохраняя ответ и код состояния
+          API_RESPONSE_FILE=$(mktemp)
+          HTTP_STATUS=$(curl -s -w "%{http_code}" \
+            -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/users/$GITHUB_USER/repos?type=owner&per_page=100" | \
-            jq -r '.[] | select(.archived==false and .name!=".github") | .name')
+            "https://api.github.com/users/$GITHUB_USER/repos?type=owner&per_page=100" \
+            -o $API_RESPONSE_FILE)
 
+          # ПРОВЕРКА НА ОШИБКУ: Если код ответа не 200 (ОК), останавливаемся
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить список репозиториев."
+            echo "Код ответа от GitHub API: $HTTP_STATUS"
+            echo "Возможная причина: Неверный или просроченный токен (PAT) в секретах."
+            echo "Ответ сервера:"
+            cat $API_RESPONSE_FILE
+            exit 1 # Завершаем работу с ошибкой
+          fi
+
+          echo "✅ Список репозиториев успешно получен."
+          
+          # Теперь, когда мы уверены в успехе, обрабатываем данные с помощью jq
+          REPO_NAMES=$(cat $API_RESPONSE_FILE | jq -r '.[] | select(.archived==false and .name!=".github") | .name')
+          rm $API_RESPONSE_FILE # Удаляем временный файл
+
+          echo "-------------------------------------"
           echo "Найдено репозиториев для обработки:"
           echo "$REPO_NAMES"
           echo "-------------------------------------"
 
-          # 2. Применяем защиту к каждому репозиторию
+          # Шаг 2: Применяем защиту к каждому репозиторию
           for REPO in $REPO_NAMES; do
             echo "--- Обработка репозитория: $REPO ---"
             BRANCH_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/main")
