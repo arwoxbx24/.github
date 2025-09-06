@@ -6,7 +6,7 @@ name: Automated Branch Protector
 on:
   # 1. АВТОМАТИЧЕСКИ: запускать каждый час (в 00 минут каждого часа)
   schedule:
-    - cron: '*/2 * * * *'
+    - cron: '0 */5 * * *'
   
   # 2. ВРУЧНУЮ: оставляем возможность ручного запуска
   workflow_dispatch:
