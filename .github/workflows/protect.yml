@@ -1,12 +1,11 @@
 # Имя воркфлоу
 name: Automated Branch Protector
 
-# Запускать только вручную
 # Условия запуска
 on:
   # 1. АВТОМАТИЧЕСКИ: запускать каждый час (в 00 минут каждого часа)
   schedule:
-    - cron: '0 */5 * * *'
+    - cron: '0 * * * *' # Исправлено: теперь запускается раз в час
   
   # 2. ВРУЧНУЮ: оставляем возможность ручного запуска
   workflow_dispatch:
@@ -15,10 +14,11 @@ jobs:
   protect-all-repositories:
     runs-on: ubuntu-latest
     steps:
-      - name: Find Repos and Apply Protection
+      - name: Find Repos, Branches and Apply Protection
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
           GITHUB_USER: ${{ github.repository_owner }}
+          # Правила защиты остаются без изменений
           PROTECTION_RULES: |
             {
               "enforce_admins": true,
@@ -32,9 +32,9 @@ jobs:
               "allow_deletions": false
             }
         run: |
-          echo "Шаг 1: Получение списка репозиториев от GitHub API..."
+          echo "Шаг 1: Получение списка репозиториев..."
           
-          # Безопасно вызываем API, сохраняя ответ и код состояния
+          # Безопасно вызываем API для получения репозиториев
           API_RESPONSE_FILE=$(mktemp)
           HTTP_STATUS=$(curl -s -w "%{http_code}" \
             -H "Authorization: token $GITHUB_TOKEN" \
@@ -42,44 +42,80 @@ jobs:
             "https://api.github.com/users/$GITHUB_USER/repos?type=owner&per_page=100" \
             -o $API_RESPONSE_FILE)
 
-          # ПРОВЕРКА НА ОШИБКУ: Если код ответа не 200 (ОК), останавливаемся
+          # Критическая проверка: если не удалось получить репозитории, останавливаемся
           if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить список репозиториев."
-            echo "Код ответа от GitHub API: $HTTP_STATUS"
-            echo "Возможная причина: Неверный или просроченный токен (PAT) в секретах."
-            echo "Ответ сервера:"
+            echo "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить список репозиториев. Код ответа: $HTTP_STATUS"
+            echo "Возможная причина: Неверный или просроченный токен (PAT)."
             cat $API_RESPONSE_FILE
-            exit 1 # Завершаем работу с ошибкой
+            exit 1
           fi
 
           echo "✅ Список репозиториев успешно получен."
           
-          # Теперь, когда мы уверены в успехе, обрабатываем данные с помощью jq
+          # Извлекаем имена репозиториев, которые не архивированы и не являются .github
           REPO_NAMES=$(cat $API_RESPONSE_FILE | jq -r '.[] | select(.archived==false and .name!=".github") | .name')
-          rm $API_RESPONSE_FILE # Удаляем временный файл
+          rm $API_RESPONSE_FILE
 
-          echo "-------------------------------------"
-          echo "Найдено репозиториев для обработки:"
-          echo "$REPO_NAMES"
-          echo "-------------------------------------"
-
-          # Шаг 2: Применяем защиту к каждому репозиторию
+          # Обрабатываем каждый репозиторий
           for REPO in $REPO_NAMES; do
+            echo "-------------------------------------"
             echo "--- Обработка репозитория: $REPO ---"
-            BRANCH_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/main")
             
-            if [ "$BRANCH_CHECK_CODE" = "200" ]; then
-              echo "Ветка 'main' найдена. Применяем защиту..."
-              PROTECT_RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-                -H "Authorization: token $GITHUB_TOKEN" -d "$PROTECTION_RULES" \
-                "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/main/protection")
-              
-              if [ "$PROTECT_RESPONSE_CODE" = "200" ]; then
-                echo "✅ УСПЕХ: Защита для '$REPO' успешно применена."
-              else
-                echo "❌ ОШИБКА: Код ответа GitHub: $PROTECT_RESPONSE_CODE для '$REPO'."
-              fi
-            else
-              echo "➡️ ПРОПУСК: Ветка 'main' в '$REPO' не найдена."
+            # Шаг 2: Получение списка всех веток для текущего репозитория
+            BRANCHES_API_RESPONSE_FILE=$(mktemp)
+            BRANCHES_HTTP_STATUS=$(curl -s -w "%{http_code}" \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$GITHUB_USER/$REPO/branches" \
+              -o $BRANCHES_API_RESPONSE_FILE)
+
+            if [ "$BRANCHES_HTTP_STATUS" -ne 200 ]; then
+              echo "⚠️ ПРЕДУПРЕЖДЕНИЕ: Не удалось получить список веток для '$REPO'. Код ответа: $BRANCHES_HTTP_STATUS. Пропускаем репозиторий."
+              cat $BRANCHES_API_RESPONSE_FILE
+              rm $BRANCHES_API_RESPONSE_FILE
+              continue # Переходим к следующему репозиторию
             fi
+
+            BRANCH_NAMES=$(cat $BRANCHES_API_RESPONSE_FILE | jq -r '.[].name')
+            rm $BRANCHES_API_RESPONSE_FILE
+
+            if [ -z "$BRANCH_NAMES" ]; then
+                echo "➡️ ПРОПУСК: В репозитории '$REPO' не найдено веток."
+                continue
+            fi
+            
+            # Шаг 3: Проверяем и применяем защиту для каждой ветки
+            for BRANCH in $BRANCH_NAMES; do
+              echo "  - Проверка ветки: '$BRANCH'..."
+
+              # ПРОВЕРКА НАЛИЧИЯ ЗАЩИТЫ: Делаем GET-запрос
+              PROTECTION_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
+
+              # Если код 200, значит защита уже есть
+              if [ "$PROTECTION_CHECK_CODE" = "200" ]; then
+                echo "    ✅ ПРОПУСК: Ветка '$BRANCH' уже защищена."
+              # Если код 404, защиты нет - нужно применить
+              elif [ "$PROTECTION_CHECK_CODE" = "404" ]; then
+                echo "    ⏳ ПРИМЕНЕНИЕ ЗАЩИТЫ для ветки '$BRANCH'..."
+                
+                # Применяем защиту с помощью PUT-запроса
+                APPLY_PROTECTION_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+                  -H "Authorization: token $GITHUB_TOKEN" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  -d "$PROTECTION_RULES" \
+                  "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
+
+                if [ "$APPLY_PROTECTION_CODE" = "200" ]; then
+                  echo "    ✅ УСПЕХ: Защита для ветки '$BRANCH' успешно применена."
+                else
+                  echo "    ❌ ОШИБКА: Не удалось применить защиту для '$BRANCH'. Код ответа GitHub: $APPLY_PROTECTION_CODE."
+                fi
+              else
+                # Обработка других возможных ошибок (например, 403 Forbidden)
+                echo "    ❌ ОШИБКА: Не удалось проверить статус защиты для '$BRANCH'. Код ответа: $PROTECTION_CHECK_CODE."
+              fi
+            done
           done
