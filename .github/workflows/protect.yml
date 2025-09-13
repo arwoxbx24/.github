@@ -3,22 +3,24 @@ name: Automated Branch Protector
 
 # Условия запуска
 on:
-  # 1. АВТОМАТИЧЕСКИ: запускать каждый час (в 00 минут каждого часа)
   schedule:
-    - cron: '*/5 * * * *' # Исправлено: теперь запускается раз в час
+    # Важно: После завершения тестов верните на '0 * * * *' для запуска раз в час
+    - cron: '*/5 * * * *'
   
-  # 2. ВРУЧНУЮ: оставляем возможность ручного запуска
+  # Оставляем возможность ручного запуска
   workflow_dispatch:
 
 jobs:
   protect-all-repositories:
     runs-on: ubuntu-latest
     steps:
+      # Шаг 1: Основная логика поиска и защиты веток
       - name: Find Repos, Branches and Apply Protection
+        # Даем этому шагу ID, чтобы следующий шаг мог использовать его результаты
+        id: protection_step
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
           GITHUB_USER: ${{ github.repository_owner }}
-          # Правила защиты остаются без изменений
           PROTECTION_RULES: |
             {
               "enforce_admins": true,
@@ -32,9 +34,13 @@ jobs:
               "allow_deletions": false
             }
         run: |
-          echo "Шаг 1: Получение списка репозиториев..."
+          # Инициализируем переменные-счетчики для будущего отчета
+          protected_list=""
+          skipped_count=0
+          newly_protected_count=0
+          error_count=0
           
-          # Безопасно вызываем API для получения репозиториев
+          echo "Шаг 1: Получение списка репозиториев..."
           API_RESPONSE_FILE=$(mktemp)
           HTTP_STATUS=$(curl -s -w "%{http_code}" \
             -H "Authorization: token $GITHUB_TOKEN" \
@@ -42,26 +48,21 @@ jobs:
             "https://api.github.com/users/$GITHUB_USER/repos?type=owner&per_page=100" \
             -o $API_RESPONSE_FILE)
 
-          # Критическая проверка: если не удалось получить репозитории, останавливаемся
           if [ "$HTTP_STATUS" -ne 200 ]; then
             echo "❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить список репозиториев. Код ответа: $HTTP_STATUS"
-            echo "Возможная причина: Неверный или просроченный токен (PAT)."
             cat $API_RESPONSE_FILE
             exit 1
           fi
 
           echo "✅ Список репозиториев успешно получен."
-          
-          # Извлекаем имена репозиториев, которые не архивированы и не являются .github
           REPO_NAMES=$(cat $API_RESPONSE_FILE | jq -r '.[] | select(.archived==false and .name!=".github") | .name')
           rm $API_RESPONSE_FILE
 
-          # Обрабатываем каждый репозиторий
+          # --- ВСЯ ПРЕДЫДУЩАЯ ЛОГИКА ОСТАЕТСЯ НА МЕСТЕ ---
           for REPO in $REPO_NAMES; do
             echo "-------------------------------------"
             echo "--- Обработка репозитория: $REPO ---"
             
-            # Шаг 2: Получение списка всех веток для текущего репозитория
             BRANCHES_API_RESPONSE_FILE=$(mktemp)
             BRANCHES_HTTP_STATUS=$(curl -s -w "%{http_code}" \
               -H "Authorization: token $GITHUB_TOKEN" \
@@ -70,10 +71,10 @@ jobs:
               -o $BRANCHES_API_RESPONSE_FILE)
 
             if [ "$BRANCHES_HTTP_STATUS" -ne 200 ]; then
-              echo "⚠️ ПРЕДУПРЕЖДЕНИЕ: Не удалось получить список веток для '$REPO'. Код ответа: $BRANCHES_HTTP_STATUS. Пропускаем репозиторий."
-              cat $BRANCHES_API_RESPONSE_FILE
+              echo "⚠️ ПРЕДУПРЕЖДЕНИЕ: Не удалось получить список веток для '$REPO'. Код: $BRANCHES_HTTP_STATUS."
+              error_count=$((error_count+1))
               rm $BRANCHES_API_RESPONSE_FILE
-              continue # Переходим к следующему репозиторию
+              continue
             fi
 
             BRANCH_NAMES=$(cat $BRANCHES_API_RESPONSE_FILE | jq -r '.[].name')
@@ -84,38 +85,64 @@ jobs:
                 continue
             fi
             
-            # Шаг 3: Проверяем и применяем защиту для каждой ветки
             for BRANCH in $BRANCH_NAMES; do
               echo "  - Проверка ветки: '$BRANCH'..."
+              PROTECTION_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
 
-              # ПРОВЕРКА НАЛИЧИЯ ЗАЩИТЫ: Делаем GET-запрос
-              PROTECTION_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                -H "Authorization: token $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
-
-              # Если код 200, значит защита уже есть
               if [ "$PROTECTION_CHECK_CODE" = "200" ]; then
                 echo "    ✅ ПРОПУСК: Ветка '$BRANCH' уже защищена."
-              # Если код 404, защиты нет - нужно применить
+                skipped_count=$((skipped_count+1))
               elif [ "$PROTECTION_CHECK_CODE" = "404" ]; then
                 echo "    ⏳ ПРИМЕНЕНИЕ ЗАЩИТЫ для ветки '$BRANCH'..."
-                
-                # Применяем защиту с помощью PUT-запроса
                 APPLY_PROTECTION_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-                  -H "Authorization: token $GITHUB_TOKEN" \
-                  -H "Accept: application/vnd.github.v3+json" \
-                  -d "$PROTECTION_RULES" \
+                  -H "Authorization: token $GITHUB_TOKEN" -d "$PROTECTION_RULES" \
                   "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
 
                 if [ "$APPLY_PROTECTION_CODE" = "200" ]; then
                   echo "    ✅ УСПЕХ: Защита для ветки '$BRANCH' успешно применена."
+                  protected_list="$protected_list\n- \`$REPO\` / \`$BRANCH\`"
+                  newly_protected_count=$((newly_protected_count+1))
                 else
-                  echo "    ❌ ОШИБКА: Не удалось применить защиту для '$BRANCH'. Код ответа GitHub: $APPLY_PROTECTION_CODE."
+                  echo "    ❌ ОШИБКА: Не удалось применить защиту для '$BRANCH'. Код: $APPLY_PROTECTION_CODE."
+                  error_count=$((error_count+1))
                 fi
               else
-                # Обработка других возможных ошибок (например, 403 Forbidden)
-                echo "    ❌ ОШИБКА: Не удалось проверить статус защиты для '$BRANCH'. Код ответа: $PROTECTION_CHECK_CODE."
+                echo "    ❌ ОШИБКА: Не удалось проверить статус защиты для '$BRANCH'. Код: $PROTECTION_CHECK_CODE."
+                error_count=$((error_count+1))
               fi
             done
           done
+
+          # --- ДОБАВЛЕННЫЙ ФРАГМЕНТ: Сохраняем результаты для следующего шага ---
+          echo "protected_list<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$protected_list" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "skipped_count=$skipped_count" >> $GITHUB_OUTPUT
+          echo "newly_protected_count=$newly_protected_count" >> $GITHUB_OUTPUT
+          echo "error_count=$error_count" >> $GITHUB_OUTPUT
+
+      # Шаг 2: Новый шаг, который генерирует красивый отчет
+      - name: Generate Job Summary
+        # `if: always()` гарантирует, что отчет создастся, даже если предыдущий шаг завершился с ошибкой
+        if: always()
+        run: |
+          echo "### 🛡️ Отчет о работе Automated Branch Protector" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Красивая таблица со статистикой
+          echo "| Статус | Количество |" >> $GITHUB_STEP_SUMMARY
+          echo "|:---|:---|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Новая защита применена | **${{ steps.protection_step.outputs.newly_protected_count }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| ➡️ Пропущено (уже защищены) | **${{ steps.protection_step.outputs.skipped_count }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Обнаружено ошибок | **${{ steps.protection_step.outputs.error_count }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Если были применены новые защиты, выводим их список
+          if [ "${{ steps.protection_step.outputs.newly_protected_count }}" -gt 0 ]; then
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "#### Детализация примененных защит:" >> $GITHUB_STEP_SUMMARY
+            echo "${{ steps.protection_step.outputs.protected_list }}" >> $GITHUB_STEP_SUMMARY
+          # Если ничего не делали, сообщаем об этом
+          elif [ "${{ steps.protection_step.outputs.newly_protected_count }}" -eq 0 ] && [ "${{ steps.protection_step.outputs.error_count }}" -eq 0 ]; then
+            echo "> Никаких действий не потребовалось. Все найденные ветки уже были под защитой." >> $GITHUB_STEP_SUMMARY
+          fi
