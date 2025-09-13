@@ -1,0 +1,81 @@
+name: Bitbucket Mirror Factory and Sync
+
+# ==========================================
+# НАСТРОЙКИ
+# ==========================================
+env:
+  # Расписание
+  CRON_SCHEDULE: '*/5 * * * *' # каждые 5 минут
+  # Bitbucket Workspace ID and Username
+  BB_WORKSPACE: arwox
+  BB_USERNAME: arwox-admin
+# ==========================================
+
+on:
+  workflow_dispatch:
+
+jobs:
+  mirror-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get list of GitHub repos
+        id: github_repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ github.repository_owner }}
+        run: |
+          gh_repos=$(gh api "/orgs/${GH_USER}/repos" --jq '.[] | select(.name != ".github" and (.name | endswith("-mirror") | not)) | .name')
+          echo "gh_repos<<EOF" >> $GITHUB_OUTPUT
+          echo "$gh_repos" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Sync all repos to Bitbucket
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ github.repository_owner }}
+          BITBUCKET_PAT: ${{ secrets.BITBUCKET_PAT }}
+          BB_WORKSPACE: ${{ env.BB_WORKSPACE }}
+          BB_USERNAME: ${{ env.BB_USERNAME }}
+          GH_REPOS: ${{ steps.github_repos.outputs.gh_repos }}
+        run: |
+          for repo in $GH_REPOS; do
+            mirror_name="${repo}-mirror"
+            echo "--- Processing ${repo} for Bitbucket ---"
+
+            # Check if Bitbucket project exists
+            # Bitbucket API for checking repo existence: GET /repositories/{workspace}/{repo_slug}
+            # Returns 200 if exists, 404 if not.
+            bb_repo_exists=$(curl -s -o /dev/null -w "%{http_code}" \
+              -u "${BB_USERNAME}:${BITBUCKET_PAT}" \
+              "https://api.bitbucket.org/2.0/repositories/${BB_WORKSPACE}/${mirror_name}")
+
+            # If it doesn't exist, create it
+            if [ "$bb_repo_exists" == "404" ]; then
+              echo "Mirror project not found. Creating ${mirror_name} on Bitbucket..."
+              # Bitbucket API for creating repo: POST /repositories/{workspace}/{repo_slug}
+              create_response=$(curl -s -X POST \
+                -u "${BB_USERNAME}:${BITBUCKET_PAT}" \
+                -H "Content-Type: application/json" \
+                -d "{\"scm\": \"git\", \"is_private\": true, \"fork_policy\": \"no_forks\"}" \
+                "https://api.bitbucket.org/2.0/repositories/${BB_WORKSPACE}/${mirror_name}")
+              
+              if echo "$create_response" | grep -q "error"; then
+                echo "❌ Failed to create Bitbucket project for $mirror_name: $create_response"
+                continue
+              fi
+              echo "✅ Bitbucket project ${mirror_name} created."
+            else
+              echo "✅ Mirror project ${mirror_name} already exists."
+            fi
+
+            # Now, mirror the repository
+            echo "Syncing ${repo} to ${mirror_name} on Bitbucket..."
+            git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo}.git"
+            cd "${repo}.git"
+            # Bitbucket push URL: https://x-token-auth:{app_password}@bitbucket.org/{workspace}/{repo_slug}.git
+            git remote set-url origin "https://x-token-auth:${BITBUCKET_PAT}@bitbucket.org/${BB_WORKSPACE}/${mirror_name}.git"
+            git push --mirror
+            cd ..
+            rm -rf "${repo}.git"
+            echo "✅ Successfully synced ${repo} to ${mirror_name} on Bitbucket."
+          done

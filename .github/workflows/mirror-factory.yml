@@ -1,0 +1,73 @@
+name: Mirror Factory and Sync (GitLab Only)
+
+# ==========================================
+# НАСТРОЙКИ
+# ==========================================
+env:
+  # Расписание
+  CRON_SCHEDULE: '*/5 * * * *' # каждые 5 минут
+# ==========================================
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # HARDCODED
+  workflow_dispatch:
+
+jobs:
+  mirror-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get list of GitHub repos
+        id: github_repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ github.repository_owner }}
+        run: |
+          gh_repos=$(gh api "/orgs/${GH_USER}/repos" --jq '.[] | select(.name != ".github" and (.name | endswith("-mirror") | not)) | .name')
+          echo "gh_repos<<EOF" >> $GITHUB_OUTPUT
+          echo "$gh_repos" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Sync all repos to GitLab
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ github.repository_owner }}
+          GITLAB_PAT: ${{ secrets.GITLAB_PAT }}
+          GH_REPOS: ${{ steps.github_repos.outputs.gh_repos }}
+        run: |
+          gitlab_user=$(curl --header "PRIVATE-TOKEN: ${GITLAB_PAT}" https://gitlab.com/api/v4/user | jq -r '.username')
+          
+          for repo in $GH_REPOS; do
+            mirror_name="${repo}-mirror"
+            echo "--- Processing ${repo} for GitLab ---"
+
+            # Check if GitLab project exists
+            gl_project_id=$(curl --header "PRIVATE-TOKEN: ${GITLAB_PAT}" "https://gitlab.com/api/v4/projects?search=${mirror_name}" | jq -r --arg name "${mirror_name}" '.[] | select(.name == $name) | .id')
+
+            # If it doesn't exist, create it
+            if [ -z "$gl_project_id" ]; then
+              echo "Mirror project not found. Creating ${mirror_name} on GitLab..."
+              gl_project_id=$(curl --request POST --header "PRIVATE-TOKEN: ${GITLAB_PAT}" \
+                --data "name=${mirror_name}&visibility=private" \
+                "https://gitlab.com/api/v4/projects" | jq -r '.id')
+              
+              if [ "$gl_project_id" == "null" ] || [ -z "$gl_project_id" ]; then
+                echo "❌ Failed to create GitLab project for $mirror_name"
+                continue
+              fi
+              echo "✅ GitLab project ${mirror_name} created."
+            else
+              echo "✅ Mirror project ${mirror_name} already exists."
+            fi
+
+            # Now, mirror the repository
+            echo "Syncing ${repo} to ${mirror_name} on GitLab..."
+            git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo}.git"
+            cd "${repo}.git"
+            git remote set-url origin "https://${gitlab_user}:${GITLAB_PAT}@gitlab.com/${gitlab_user}/${mirror_name}.git"
+            git push --mirror
+            cd ..
+            rm -rf "${repo}.git"
+            echo "✅ Successfully synced ${repo} to ${mirror_name} on GitLab."
+          done
+
