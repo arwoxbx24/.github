@@ -103,7 +103,7 @@ jobs:
           if [[ "$ACTION" == "archived" || "$ACTION" == "deleted" ]]; then
             echo "GitHub repository '$REPO_NAME' was ${ACTION}. Archiving GitLab mirror."
             mirror_name="${REPO_NAME}-mirror"
-            project_id=$(get_gitlab_project_id $mirror_name | jq -r '.id')
+            project_id=$(get_gitlab_project $mirror_name | jq -r '.id')
             if [ -n "$project_id" ] && [ "$project_id" != "null" ]; then
               archive_gitlab_project $project_id
               echo "✅ GitLab project ${mirror_name} archived."
@@ -130,7 +130,7 @@ jobs:
             archived_gh_repos=$(gh api "/orgs/${GH_USER}/repos?type=all" --paginate --jq '.[] | select(.archived==true and .name != ".github") | .name')
             for repo in $archived_gh_repos; do
                 mirror_name="${repo}-mirror"
-                project_id=$(get_gitlab_project_id $mirror_name | jq -r '.id')
+                project_id=$(get_gitlab_project $mirror_name | jq -r '.id')
                 if [ -n "$project_id" ] && [ "$project_id" != "null" ]; then
                   archive_gitlab_project $project_id
                 fi
