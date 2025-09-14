@@ -8,8 +8,8 @@ on:
 jobs:
   mirror-and-sync:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+        permissions:
+      administration: write
     steps:
       - name: GitLab Sync Action
         env:
@@ -52,7 +52,7 @@ jobs:
           protect_github_branch() {
             local repo_name=$1
             echo "--- Protecting main branch for ${repo_name} ---"
-            protection_status=$(gh api "/repos/${GH_USER}/${repo_name}/branches/main/protection" --silent --jq '.enforce_admins.enabled' || echo "not_found")
+                        protection_status=$(gh api "/repos/${GH_USER}/${repo_name}/branches/main/protection" --jq '.enforce_admins.enabled' || echo "not_found")
             if [ "$protection_status" == "true" ]; then
                 echo "✅ Branch 'main' is already protected."
                 return
