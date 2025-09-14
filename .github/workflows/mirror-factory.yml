@@ -6,6 +6,9 @@ on:
   repository:
     types: [created, archived, unarchived, deleted]
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   mirror-and-sync:
@@ -24,6 +27,9 @@ jobs:
             echo "repo_name=ALL" >> $GITHUB_OUTPUT
             echo "action=sync_all" >> $GITHUB_OUTPUT
             echo "repo_archived=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "action=push_to_control_repo" >> $GITHUB_OUTPUT
+            echo "repo_name=${{ github.repository }}" >> $GITHUB_OUTPUT
           fi
 
       - name: GitLab Sync Action
@@ -37,6 +43,12 @@ jobs:
           REPO_ARCHIVED: ${{ steps.get_info.outputs.repo_archived }}
         run: |
           set -e # Exit on error
+
+          # --- Main Logic ---
+          if [[ "$ACTION" == "push_to_control_repo" ]]; then
+            echo "Workflow triggered by push to the .github repository itself. No action needed."
+            exit 0
+          fi
 
           # --- Helper Functions ---
           get_gitlab_user() {
@@ -112,7 +124,7 @@ jobs:
             echo "✅ Successfully synced ${repo_name} to ${mirror_name} on GitLab."
           }
 
-          # --- Main Logic ---
+          # --- Main Logic (continued) ---
           if [[ "$ACTION" == "created" ]]; then
             echo "GitHub repository '$REPO_NAME' was created. Syncing to GitLab and applying branch protection."
             sync_repo "$REPO_NAME"
