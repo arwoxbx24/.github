@@ -5,7 +5,7 @@ name: Automated Branch Protector
 on:
   schedule:
     # Важно: После завершения тестов верните на '0 * * * *' для запуска раз в час
-    - cron: '*/5 * * * *'
+    - cron: '*/5 * * * *
   
   # Оставляем возможность ручного запуска
   workflow_dispatch:
@@ -77,43 +77,47 @@ jobs:
               continue
             fi
 
-            BRANCH_NAMES=$(cat $BRANCHES_API_RESPONSE_FILE | jq -r '.[].name')
+            # ИЗМЕНЕНИЕ: Получаем только ветку 'main'
+            BRANCH_NAMES=$(cat $BRANCHES_API_RESPONSE_FILE | jq -r '.[] | select(.name=="main") | .name')
             rm $BRANCHES_API_RESPONSE_FILE
 
             if [ -z "$BRANCH_NAMES" ]; then
-                echo "➡️ ПРОПУСК: В репозитории '$REPO' не найдено веток."
-                continue
+              echo "➡️ ПРОПУСК: В репозитории '$REPO' не найдено ветки 'main'."
+              continue
             fi
             
             for BRANCH in $BRANCH_NAMES; do
-              echo "  - Проверка ветки: '$BRANCH'..."
-              PROTECTION_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
+              echo " - Проверка ветки: '$BRANCH'..."
+              PROTECTION_CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
 
               if [ "$PROTECTION_CHECK_CODE" = "200" ]; then
-                echo "    ✅ ПРОПУСК: Ветка '$BRANCH' уже защищена."
+                echo " ✅ ПРОПУСК: Ветка '$BRANCH' уже защищена."
                 skipped_count=$((skipped_count+1))
               elif [ "$PROTECTION_CHECK_CODE" = "404" ]; then
-                echo "    ⏳ ПРИМЕНЕНИЕ ЗАЩИТЫ для ветки '$BRANCH'..."
+                echo " ⏳ ПРИМЕНЕНИЕ ЗАЩИТЫ для ветки '$BRANCH'..."
                 APPLY_PROTECTION_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-                  -H "Authorization: token $GITHUB_TOKEN" -d "$PROTECTION_RULES" \
+                  -H "Authorization: token $GITHUB_TOKEN" \
+                  -d "$PROTECTION_RULES" \
                   "https://api.github.com/repos/$GITHUB_USER/$REPO/branches/$BRANCH/protection")
 
                 if [ "$APPLY_PROTECTION_CODE" = "200" ]; then
-                  echo "    ✅ УСПЕХ: Защита для ветки '$BRANCH' успешно применена."
+                  echo " ✅ УСПЕХ: Защита для ветки '$BRANCH' успешно применена."
                   protected_list="$protected_list\n- \`$REPO\` / \`$BRANCH\`"
                   newly_protected_count=$((newly_protected_count+1))
                 else
-                  echo "    ❌ ОШИБКА: Не удалось применить защиту для '$BRANCH'. Код: $APPLY_PROTECTION_CODE."
+                  echo " ❌ ОШИБКА: Не удалось применить защиту для '$BRANCH'. Код: $APPLY_PROTECTION_CODE."
                   error_count=$((error_count+1))
                 fi
               else
-                echo "    ❌ ОШИБКА: Не удалось проверить статус защиты для '$BRANCH'. Код: $PROTECTION_CHECK_CODE."
+                echo " ❌ ОШИБКА: Не удалось проверить статус защиты для '$BRANCH'. Код: $PROTECTION_CHECK_CODE."
                 error_count=$((error_count+1))
               fi
             done
           done
 
-          # --- ДОБАВЛЕННЫЙ ФРАГМЕНТ: Сохраняем результаты для следующего шага ---
+          # --- ДОБАВЛЕННЫЙ ФРАГМЕНТ: Сохраняем результаты для следующего шага --
           echo "protected_list<<EOF" >> $GITHUB_OUTPUT
           echo -e "$protected_list" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -144,5 +148,5 @@ jobs:
             echo "${{ steps.protection_step.outputs.protected_list }}" >> $GITHUB_STEP_SUMMARY
           # Если ничего не делали, сообщаем об этом
           elif [ "${{ steps.protection_step.outputs.newly_protected_count }}" -eq 0 ] && [ "${{ steps.protection_step.outputs.error_count }}" -eq 0 ]; then
-            echo "> Никаких действий не потребовалось. Все найденные ветки уже были под защитой." >> $GITHUB_STEP_SUMMARY
+            echo "> Никаких действий не потребовалось. Все найденные ветки 'main' уже были под защитой." >> $GITHUB_STEP_SUMMARY
           fi
