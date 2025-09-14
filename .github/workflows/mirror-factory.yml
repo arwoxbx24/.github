@@ -105,7 +105,7 @@ jobs:
           fi
           
           echo "Fetching all repos from ${repos_url}..."
-          gh repo list ${GH_USER} --limit 1000 --jq 'map(select(.name != ".github" and (.name | endswith("-mirror") | not))) | .[] | .name' | while read -r repo_name; do
+                    gh repo list ${GH_USER} --limit 1000 --json name --jq 'map(select(.name != ".github" and (.name | endswith("-mirror") | not))) | .[] | .name' | while read -r repo_name; do
             echo "========================================="
             echo "Processing repository: ${repo_name}"
             repo_details=$(gh repo view ${GH_USER}/${repo_name} --json isArchived,defaultBranchRef)
