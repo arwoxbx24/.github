@@ -1,11 +1,10 @@
 name: Mirror Factory and Sync (GitLab Only)
 
 on:
-  push:
-    branches:
-      - main
+  schedule:
+    - cron: '*/15 * * * *'
   repository:
-    types: [created, archived, unarchived, deleted] # Added 'created'
+    types: [created, archived, unarchived, deleted]
   workflow_dispatch:
 
 jobs:
@@ -18,13 +17,8 @@ jobs:
           if [[ "${{ github.event_name }}" == "repository" ]]; then
             echo "repo_name=${{ github.event.repository.name }}" >> $GITHUB_OUTPUT
             echo "action=${{ github.event.action }}" >> $GITHUB_OUTPUT
-            # For 'created', archived is false. For others, get it from the event.
             echo "repo_archived=${{ github.event.repository.archived || 'false' }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "repo_name=${{ github.event.repository.name }}" >> $GITHUB_OUTPUT
-            echo "action=push" >> $GITHUB_OUTPUT
-            echo "repo_archived=${{ github.event.repository.archived }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "schedule" ]]; then
             echo "repo_name=ALL" >> $GITHUB_OUTPUT
             echo "action=sync_all" >> $GITHUB_OUTPUT
             echo "repo_archived=false" >> $GITHUB_OUTPUT
@@ -75,7 +69,6 @@ jobs:
           protect_github_branch() {
             local repo_name=$1
             echo "--- Protecting main branch for ${repo_name} ---"
-            # This is idempotent. It will fail if the branch doesn't exist.
             gh api --method PUT "/repos/${GH_USER}/${repo_name}/branches/main/protection" \
               -f enforce_admins=true \
               -f 'required_pull_request_reviews[required_approving_review_count]=1' \
@@ -107,7 +100,6 @@ jobs:
             fi
 
             echo "Cloning from GitHub and pushing to GitLab..."
-            # Use a temporary directory for clone
             TMP_DIR=$(mktemp -d)
             git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo_name}.git" "$TMP_DIR"
             cd "$TMP_DIR"
@@ -136,18 +128,9 @@ jobs:
           elif [[ "$ACTION" == "unarchived" ]]; then
             echo "GitHub repository '$REPO_NAME' was unarchived. Unarchiving GitLab mirror and syncing."
             sync_repo "$REPO_NAME"
-          elif [[ "$ACTION" == "push" ]]; then
-            if [[ "$REPO_ARCHIVED" == "false" ]]; then
-              echo "Push event to non-archived repo '$REPO_NAME'. Syncing to GitLab and ensuring branch protection."
-              sync_repo "$REPO_NAME"
-              protect_github_branch "$REPO_NAME" # Ensure protection is active
-            else
-              echo "Push event to archived repo '$REPO_NAME'. Skipping sync."
-            fi
           elif [[ "$ACTION" == "sync_all" ]]; then
-            echo "Manual sync triggered. Syncing all repositories."
+            echo "Scheduled or manual sync triggered. Syncing all repositories."
 
-            # Determine if owner is an Org or User for correct API endpoint
             owner_type=$(gh api "/users/${GH_USER}" --jq '.type' || echo "User")
             if [ "$owner_type" == "Organization" ]; then
               repos_url="/orgs/${GH_USER}/repos"
@@ -156,13 +139,11 @@ jobs:
             fi
             
             echo "Fetching all repos from ${repos_url}..."
-            # Fetch all repos in one go and loop through them
             gh api $repos_url --paginate --jq '.[] | select(.name != ".github" and (.name | endswith("-mirror") | not))' | while read -r repo_json; do
               repo_name=$(echo "$repo_json" | jq -r '.name')
               is_archived=$(echo "$repo_json" | jq -r '.archived')
               
               if [ "$is_archived" == "true" ]; then
-                # Handle archived repos
                 mirror_name="${repo_name}-mirror"
                 project_json=$(get_gitlab_project $mirror_name)
                 project_id=$(echo "$project_json" | jq -r '.id')
@@ -172,7 +153,6 @@ jobs:
                   archive_gitlab_project $project_id
                 fi
               else
-                # Handle active repos
                 sync_repo "$repo_name"
                 protect_github_branch "$repo_name"
               fi
