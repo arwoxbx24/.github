@@ -4,11 +4,9 @@ name: Automated Branch Protector
 # Условия запуска
 on:
   schedule:
-    # Важно: После завершения тестов верните на '0 * * * *' для запуска раз в час
-    - cron: '*/5 * * * *
-  
-  # Оставляем возможность ручного запуска
+    - cron: '*/5 * * * *'
   workflow_dispatch:
+
 
 jobs:
   protect-all-repositories:
