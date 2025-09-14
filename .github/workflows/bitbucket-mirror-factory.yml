@@ -5,7 +5,7 @@ name: Bitbucket Mirror Factory and Sync
 # ==========================================
 env:
   # Расписание
-  CRON_SCHEDULE: '*/5 * * * *' # каждые 5 минут
+    CRON_SCHEDULE: '0 */18 * * *' # каждые 18 часов
   # Bitbucket Workspace ID and Username
   BB_WORKSPACE: arwox
   BB_USERNAME: arwox-admin
