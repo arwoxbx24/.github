@@ -12,6 +12,7 @@ on:
 
 jobs:
   protect-all-repositories:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       # Шаг 1: Основная логика поиска и защиты веток
