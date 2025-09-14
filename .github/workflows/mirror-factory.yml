@@ -2,7 +2,7 @@ name: Mirror Factory and Sync (GitLab Only)
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   repository:
     types: [created, archived, unarchived, deleted]
   workflow_dispatch:
