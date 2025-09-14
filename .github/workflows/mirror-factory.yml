@@ -10,6 +10,8 @@ on:
 jobs:
   mirror-and-sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Dump GitHub context for debugging
         run: echo "${{ toJSON(github) }}"
@@ -83,10 +85,10 @@ jobs:
 
           sync_repo() {
             local repo_name=$1
-            local mirror_name="${{ repo_name }}-mirror"
+            local mirror_name="${repo_name}-mirror"
             local gitlab_user=$(get_gitlab_user)
 
-            echo "--- Syncing ${{ repo_name }} to GitLab ---"
+            echo "--- Syncing ${repo_name} to GitLab ---"
 
             local gl_project_json=$(get_gitlab_project $mirror_name)
             local gl_project_id=$(echo "$gl_project_json" | jq -r '.id')
@@ -110,7 +112,7 @@ jobs:
             git push --mirror
             cd ..
             rm -rf "$TMP_DIR"
-            echo "✅ Successfully synced ${{ repo_name }} to ${{ mirror_name }} on GitLab."
+            echo "✅ Successfully synced ${repo_name} to ${mirror_name} on GitLab."
           }
 
           # --- Main Logic ---
@@ -119,14 +121,14 @@ jobs:
             sync_repo "$REPO_NAME"
             protect_github_branch "$REPO_NAME"
           elif [[ "$ACTION" == "archived" || "$ACTION" == "deleted" ]]; then
-            echo "GitHub repository '$REPO_NAME' was ${{ ACTION }}. Archiving GitLab mirror."
-            mirror_name="${{ REPO_NAME }}-mirror"
+            echo "GitHub repository '$REPO_NAME' was ${ACTION}. Archiving GitLab mirror."
+            mirror_name="${REPO_NAME}-mirror"
             project_id=$(get_gitlab_project $mirror_name | jq -r '.id')
             if [ -n "$project_id" ] && [ "$project_id" != "null" ]; then
               archive_gitlab_project $project_id
-              echo "✅ GitLab project ${{ mirror_name }} archived."
+              echo "✅ GitLab project ${mirror_name} archived."
             else
-              echo "⚠️ GitLab mirror '${{ mirror_name }}' not found. Nothing to archive."
+              echo "⚠️ GitLab mirror '${mirror_name}' not found. Nothing to archive."
             fi
           elif [[ "$ACTION" == "unarchived" ]]; then
             echo "GitHub repository '$REPO_NAME' was unarchived. Unarchiving GitLab mirror and syncing."
@@ -147,12 +149,12 @@ jobs:
               is_archived=$(echo "$repo_json" | jq -r '.archived')
               
               if [ "$is_archived" == "true" ]; then
-                mirror_name="${{ repo_name }}-mirror"
+                mirror_name="${repo_name}-mirror"
                 project_json=$(get_gitlab_project $mirror_name)
                 project_id=$(echo "$project_json" | jq -r '.id')
                 project_archived=$(echo "$project_json" | jq -r '.archived')
                 if [ -n "$project_id" ] && [ "$project_id" != "null" ] && [ "$project_archived" != "true" ]; then
-                  echo "--- Archiving GitLab mirror for ${{ repo_name }} ---"
+                  echo "--- Archiving GitLab mirror for ${repo_name} ---"
                   archive_gitlab_project $project_id
                 fi
               else
