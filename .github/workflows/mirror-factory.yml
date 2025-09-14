@@ -3,12 +3,7 @@ name: Mirror Factory and Sync (GitLab Only)
 on:
   schedule:
     - cron: '*/5 * * * *'
-  repository:
-    types: [created, archived, unarchived, deleted]
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   mirror-and-sync:
@@ -16,41 +11,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Get Event Information
-        id: get_info
-        run: |
-          if [[ "${{ github.event_name }}" == "repository" ]]; then
-            echo "repo_name=${{ github.event.repository.name }}" >> $GITHUB_OUTPUT
-            echo "action=${{ github.event.action }}" >> $GITHUB_OUTPUT
-            echo "repo_archived=${{ github.event.repository.archived || 'false' }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "schedule" ]]; then
-            echo "repo_name=ALL" >> $GITHUB_OUTPUT
-            echo "action=sync_all" >> $GITHUB_OUTPUT
-            echo "repo_archived=false" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "action=push_to_control_repo" >> $GITHUB_OUTPUT
-            echo "repo_name=${{ github.repository }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: GitLab Sync Action
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLAB_PAT: ${{ secrets.GITLAB_PAT }}
-          GITLAB_HOST: "gitlab.com" # Made configurable
+          GITLAB_HOST: "gitlab.com"
           GH_USER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ steps.get_info.outputs.repo_name }}
-          ACTION: ${{ steps.get_info.outputs.action }}
-          REPO_ARCHIVED: ${{ steps.get_info.outputs.repo_archived }}
         run: |
-          set -e # Exit on error
+          set -e
 
-          # --- Main Logic ---
-          if [[ "$ACTION" == "push_to_control_repo" ]]; then
-            echo "Workflow triggered by push to the .github repository itself. No action needed."
-            exit 0
-          fi
-
-          # --- Helper Functions ---
           get_gitlab_user() {
             curl -s --header "PRIVATE-TOKEN: ${GITLAB_PAT}" "https://${GITLAB_HOST}/api/v4/user" | jq -r '.username'
           }
@@ -83,12 +52,17 @@ jobs:
           protect_github_branch() {
             local repo_name=$1
             echo "--- Protecting main branch for ${repo_name} ---"
+            protection_status=$(gh api "/repos/${GH_USER}/${repo_name}/branches/main/protection" --silent --jq '.enforce_admins.enabled' || echo "not_found")
+            if [ "$protection_status" == "true" ]; then
+                echo "✅ Branch 'main' is already protected."
+                return
+            fi
             gh api --method PUT "/repos/${GH_USER}/${repo_name}/branches/main/protection" \
               -f enforce_admins=true \
               -f 'required_pull_request_reviews[required_approving_review_count]=1' \
               -f restrictions=null \
               -f required_status_checks=null \
-              --silent || echo "⚠️ Could not protect main branch. It may not exist yet. Protection will be applied on first push."
+              --silent || echo "⚠️ Could not protect main branch. It may not exist yet."
             echo "✅ Branch protection rule applied for main branch."
           }
 
@@ -96,23 +70,21 @@ jobs:
             local repo_name=$1
             local mirror_name="${repo_name}-mirror"
             local gitlab_user=$(get_gitlab_user)
-
             echo "--- Syncing ${repo_name} to GitLab ---"
-
             local gl_project_json=$(get_gitlab_project $mirror_name)
             local gl_project_id=$(echo "$gl_project_json" | jq -r '.id')
             local gl_project_archived=$(echo "$gl_project_json" | jq -r '.archived')
-
             if [ -z "$gl_project_id" ] || [ "$gl_project_id" == "null" ]; then
+              echo "GitLab project not found, creating..."
               gl_project_id=$(create_gitlab_project $mirror_name)
               if [ "$gl_project_id" == "null" ] || [ -z "$gl_project_id" ]; then
                 echo "❌ Failed to create GitLab project for $mirror_name"
                 return 1
               fi
             elif [ "$gl_project_archived" == "true" ]; then
+                echo "GitLab project is archived, unarchiving..."
                 unarchive_gitlab_project $gl_project_id
             fi
-
             echo "Cloning from GitHub and pushing to GitLab..."
             TMP_DIR=$(mktemp -d)
             git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo_name}.git" "$TMP_DIR"
@@ -124,52 +96,40 @@ jobs:
             echo "✅ Successfully synced ${repo_name} to ${mirror_name} on GitLab."
           }
 
-          # --- Main Logic (continued) ---
-          if [[ "$ACTION" == "created" ]]; then
-            echo "GitHub repository '$REPO_NAME' was created. Syncing to GitLab and applying branch protection."
-            sync_repo "$REPO_NAME"
-            protect_github_branch "$REPO_NAME"
-          elif [[ "$ACTION" == "archived" || "$ACTION" == "deleted" ]]; then
-            echo "GitHub repository '$REPO_NAME' was ${ACTION}. Archiving GitLab mirror."
-            mirror_name="${REPO_NAME}-mirror"
-            project_id=$(get_gitlab_project $mirror_name | jq -r '.id')
-            if [ -n "$project_id" ] && [ "$project_id" != "null" ]; then
-              archive_gitlab_project $project_id
-              echo "✅ GitLab project ${mirror_name} archived."
-            else
-              echo "⚠️ GitLab mirror '${mirror_name}' not found. Nothing to archive."
-            fi
-          elif [[ "$ACTION" == "unarchived" ]]; then
-            echo "GitHub repository '$REPO_NAME' was unarchived. Unarchiving GitLab mirror and syncing."
-            sync_repo "$REPO_NAME"
-          elif [[ "$ACTION" == "sync_all" ]]; then
-            echo "Scheduled or manual sync triggered. Syncing all repositories."
-
-            owner_type=$(gh api "/users/${GH_USER}" --jq '.type' || echo "User")
-            if [ "$owner_type" == "Organization" ]; then
-              repos_url="/orgs/${GH_USER}/repos"
-            else
-              repos_url="/users/${GH_USER}/repos"
-            fi
-            
-            echo "Fetching all repos from ${repos_url}..."
-            gh api $repos_url --paginate --jq '.[] | select(.name != ".github" and (.name | endswith("-mirror") | not))' | while read -r repo_json; do
-              repo_name=$(echo "$repo_json" | jq -r '.name')
-              is_archived=$(echo "$repo_json" | jq -r '.archived')
-              
-              if [ "$is_archived" == "true" ]; then
-                mirror_name="${repo_name}-mirror"
-                project_json=$(get_gitlab_project $mirror_name)
-                project_id=$(echo "$project_json" | jq -r '.id')
-                project_archived=$(echo "$project_json" | jq -r '.archived')
-                if [ -n "$project_id" ] && [ "$project_id" != "null" ] && [ "$project_archived" != "true" ]; then
-                  echo "--- Archiving GitLab mirror for ${repo_name} ---"
-                  archive_gitlab_project $project_id
-                fi
-              else
-                sync_repo "$repo_name"
-                protect_github_branch "$repo_name"
-              fi
-            done
-            echo "✅ Full sync complete."
+          echo "Scheduled or manual sync triggered. Syncing all repositories."
+          owner_type=$(gh api "/users/${GH_USER}" --jq '.type' || echo "User")
+          if [ "$owner_type" == "Organization" ]; then
+            repos_url="/orgs/${GH_USER}/repos"
+          else
+            repos_url="/users/${GH_USER}/repos"
           fi
+          
+          echo "Fetching all repos from ${repos_url}..."
+          gh repo list ${GH_USER} --limit 1000 --jq 'map(select(.name != ".github" and (.name | endswith("-mirror") | not))) | .[] | .name' | while read -r repo_name; do
+            echo "========================================="
+            echo "Processing repository: ${repo_name}"
+            repo_details=$(gh repo view ${GH_USER}/${repo_name} --json isArchived,defaultBranchRef)
+            is_archived=$(echo "$repo_details" | jq -r '.isArchived')
+            default_branch=$(echo "$repo_details" | jq -r '.defaultBranchRef.name')
+            if [ "$is_archived" == "true" ]; then
+              mirror_name="${repo_name}-mirror"
+              project_json=$(get_gitlab_project $mirror_name)
+              project_id=$(echo "$project_json" | jq -r '.id')
+              project_archived=$(echo "$project_json" | jq -r '.archived')
+              if [ -n "$project_id" ] && [ "$project_id" != "null" ] && [ "$project_archived" != "true" ]; then
+                echo "--- GitHub repo is archived, archiving GitLab mirror for ${repo_name} ---"
+                archive_gitlab_project $project_id
+              else
+                echo "--- GitLab mirror for ${repo_name} is already archived or does not exist. Skipping. ---"
+              fi
+            else
+              sync_repo "$repo_name"
+              if [ -n "$default_branch" ] && [ "$default_branch" != "null" ]; then
+                protect_github_branch "$repo_name"
+              else
+                echo "⚠️ No default branch found for ${repo_name}. Cannot apply protection."
+              fi
+            fi
+          done
+          echo "========================================="
+          echo "✅ Full sync complete."
