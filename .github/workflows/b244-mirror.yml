@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Mirror repos to b244.ru
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           GITMIRROR_SSH_KEY: ${{ secrets.GITMIRROR_SSH_KEY }}
           GH_USER: arwoxbx24
           SSH_HOST: 45.139.76.176
@@ -45,7 +45,7 @@ jobs:
 
             TMP_DIR=$(mktemp -d)
             echo "Cloning from GitHub..."
-            if ! git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo}.git" "$TMP_DIR"; then
+            if ! git clone --mirror "https://oauth2:${GH_PAT}@github.com/${GH_USER}/${repo}.git" "$TMP_DIR"; then
               echo "Failed to clone ${repo} from GitHub. Skipping."
               rm -rf "$TMP_DIR"
               FAILED=$((FAILED + 1))
