@@ -1,0 +1,77 @@
+name: b244-mirror
+
+on:
+  schedule:
+    - cron: '0 */18 * * *'
+  workflow_dispatch:
+
+jobs:
+  mirror-to-b244:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror repos to b244.ru
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITMIRROR_SSH_KEY: ${{ secrets.GITMIRROR_SSH_KEY }}
+          GH_USER: arwoxbx24
+          SSH_HOST: 45.139.76.176
+          SSH_USER: gitmirror
+        run: |
+          set +e
+
+          REPOS=(
+            claude-projects
+            claude-shared
+            stroyremont
+            claude-profile-acc1
+            claude-state
+            claude-profile-acc2
+            browser-logger-extension
+            codex-state
+          )
+
+          # Setup SSH key
+          SSH_KEY_FILE=$(mktemp)
+          echo "${GITMIRROR_SSH_KEY}" > "$SSH_KEY_FILE"
+          chmod 600 "$SSH_KEY_FILE"
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_FILE}"
+
+          FAILED=0
+          SUCCEEDED=0
+
+          for repo in "${REPOS[@]}"; do
+            echo "========================================="
+            echo "Mirroring: ${repo}"
+
+            TMP_DIR=$(mktemp -d)
+            echo "Cloning from GitHub..."
+            if ! git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo}.git" "$TMP_DIR"; then
+              echo "Failed to clone ${repo} from GitHub. Skipping."
+              rm -rf "$TMP_DIR"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            echo "Pushing to b244.ru..."
+            cd "$TMP_DIR"
+            if ! git push --mirror "ssh://${SSH_USER}@${SSH_HOST}/home/${SSH_USER}/repos/${repo}.git"; then
+              echo "Failed to push ${repo} to b244.ru."
+              FAILED=$((FAILED + 1))
+            else
+              echo "Successfully mirrored ${repo}."
+              SUCCEEDED=$((SUCCEEDED + 1))
+            fi
+
+            cd /
+            rm -rf "$TMP_DIR"
+          done
+
+          # Cleanup key
+          rm -f "$SSH_KEY_FILE"
+
+          echo "========================================="
+          echo "Done. Succeeded: ${SUCCEEDED}, Failed: ${FAILED}"
+
+          if [ "$FAILED" -gt 0 ]; then
+            exit 1
+          fi
