@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Mirror repos to b244.ru
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
           GITMIRROR_SSH_KEY: ${{ secrets.GITMIRROR_SSH_KEY }}
           GH_USER: arwoxbx24
           SSH_HOST: 45.139.76.176
