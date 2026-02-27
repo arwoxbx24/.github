@@ -45,7 +45,7 @@ jobs:
 
             TMP_DIR=$(mktemp -d)
             echo "Cloning from GitHub..."
-            if ! git clone --mirror "https://oauth2:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo}.git" "$TMP_DIR"; then
+            if ! git clone --mirror "https://x-access-token:${GITHUB_TOKEN}@github.com/${GH_USER}/${repo}.git" "$TMP_DIR"; then
               echo "Failed to clone ${repo} from GitHub. Skipping."
               rm -rf "$TMP_DIR"
               FAILED=$((FAILED + 1))
