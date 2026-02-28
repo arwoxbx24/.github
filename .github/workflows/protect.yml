@@ -18,7 +18,7 @@ jobs:
         # Даем этому шагу ID, чтобы следующий шаг мог использовать его результаты
         id: protection_step
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_USER: ${{ github.repository_owner }}
           PROTECTION_RULES: |
             {
