@@ -4,7 +4,7 @@ name: Automated Branch Protector
 # Условия запуска
 on:
   schedule:
-        - cron: '0 */18 * * *'
+        - cron: '0 0 * * 0'
   workflow_dispatch:
 
 
