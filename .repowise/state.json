@@ -1,0 +1,51 @@
+{
+  "last_sync_commit": "b444f789e8b0b84d1d80e624338a1b18a8d4ab8a",
+  "total_pages": 2,
+  "provider": "openai",
+  "model": "gpt-5.4-nano",
+  "docs_mode": "llm",
+  "docs_enabled": true,
+  "run_mode": "standard",
+  "git_tier": "full",
+  "include_submodules": false,
+  "total_tokens": 2028,
+  "phase_timings": {
+    "co_change": 0.0,
+    "traverse": 0.05,
+    "git": 0.1,
+    "parse": 0.62,
+    "graph.imports": 0.0,
+    "graph.type_refs": 0.0,
+    "graph.heritage": 0.0,
+    "graph.calls": 0.0,
+    "dynamic_hints": 0.02,
+    "graph.metrics": 0.25,
+    "graph.communities": 0.01,
+    "external_systems": 0.0,
+    "dead_code": 0.06,
+    "decisions": 0.06,
+    "health": 0.1,
+    "knowledge_graph.skeleton": 0.0,
+    "graph.flows": 0.0
+  },
+  "knowledge_graph": {
+    "version": "1.0.0",
+    "node_count": 4,
+    "layer_count": 3,
+    "tour_steps": 1,
+    "has_summaries": true,
+    "fingerprint": "93d06a6550407ec0"
+  },
+  "onboarding_slots_offered": [
+    "active_landscape",
+    "getting_started",
+    "glossary",
+    "how_it_works",
+    "key_concepts"
+  ],
+  "store_format_version": 2,
+  "written_by_version": "0.41.0",
+  "config_fingerprint": "e79911a50235a586d586fa871ed0254eb6e724d0f50d250d78db7a4bf044108c",
+  "health_analyzer_version": 1,
+  "last_full_rescore_at": 1786993401.0
+}
